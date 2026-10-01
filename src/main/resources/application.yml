@@ -1,0 +1,73 @@
+spring:
+  application:
+    name: snapchat-ephemeral-video-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ephemeral}
+    username: ${DB_USERNAME:ephemeral}
+    password: ${DB_PASSWORD:ephemeral}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 5000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+  task:
+    scheduling:
+      pool:
+        size: 2
+
+server:
+  port: 8080
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+app:
+  aws:
+    region: ${AWS_REGION:us-east-1}
+    # Blank = real AWS. Set for LocalStack (see application-local.yml).
+    endpoint-override: ${AWS_ENDPOINT_OVERRIDE:}
+    # Blank = DefaultCredentialsProvider chain (IAM role, env, profile...).
+    access-key: ${AWS_ACCESS_KEY_ID:}
+    secret-key: ${AWS_SECRET_ACCESS_KEY:}
+    path-style-access: ${AWS_S3_PATH_STYLE:false}
+    s3:
+      bucket: ${S3_BUCKET:ephemeral-videos}
+      upload-url-ttl: 5m
+      # Creates bucket + lifecycle backstop rule at startup. Keep false when infra is managed by IaC.
+      auto-init: ${S3_AUTO_INIT:false}
+    cloudfront:
+      enabled: ${CLOUDFRONT_ENABLED:true}
+      domain: ${CLOUDFRONT_DOMAIN:}
+      key-pair-id: ${CLOUDFRONT_KEY_PAIR_ID:}
+      # PKCS#8 PEM private key ("-----BEGIN PRIVATE KEY-----")
+      private-key-path: ${CLOUDFRONT_PRIVATE_KEY_PATH:}
+      signed-url-ttl: 60s
+  playback:
+    # Redis TTL of the single-use playback token (must be >= signed-url-ttl)
+    token-ttl: 90s
+  retention:
+    view-once-ttl: 5m
+    store-24hr-ttl: 24h
+  cleanup:
+    sweep-interval-ms: 30000
+    batch-size: 100
+    lock-ttl: 25s

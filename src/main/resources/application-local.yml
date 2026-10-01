@@ -1,0 +1,13 @@
+app:
+  aws:
+    region: us-east-1
+    endpoint-override: http://localhost:4566
+    access-key: test
+    secret-key: test
+    path-style-access: true
+    s3:
+      bucket: ephemeral-videos
+      auto-init: true
+    cloudfront:
+      # LocalStack community has no CloudFront: falls back to a 60s S3 presigned GET URL.
+      enabled: false

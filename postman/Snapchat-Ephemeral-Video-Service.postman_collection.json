@@ -1,0 +1,1215 @@
+{
+  "info": {
+    "name": "Snapchat Ephemeral Video Service",
+    "description": "End-to-end tests for the ephemeral video backend. Run folders in order with the Collection Runner (delay 3000 ms). Edit baseUrl / ownerId / viewerId in Collection > Variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "ownerId",
+      "value": "alice"
+    },
+    {
+      "key": "viewerId",
+      "value": "bob"
+    },
+    {
+      "key": "vo_videoId",
+      "value": ""
+    },
+    {
+      "key": "vo_uploadUrl",
+      "value": ""
+    },
+    {
+      "key": "vo_playbackToken",
+      "value": ""
+    },
+    {
+      "key": "vo_signedUrl",
+      "value": ""
+    },
+    {
+      "key": "st_videoId",
+      "value": ""
+    },
+    {
+      "key": "st_uploadUrl",
+      "value": ""
+    },
+    {
+      "key": "st_playbackToken",
+      "value": ""
+    },
+    {
+      "key": "st_signedUrl",
+      "value": ""
+    },
+    {
+      "key": "neg_videoId",
+      "value": ""
+    },
+    {
+      "key": "fb_videoId",
+      "value": ""
+    },
+    {
+      "key": "fb_uploadUrl",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Actuator health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/actuator/health",
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. VIEW_ONCE_5MIN happy path",
+      "item": [
+        {
+          "name": "1. Upload request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('videoId + presigned URL returned', () => {",
+                  "  pm.expect(b.videoId).to.be.a('string');",
+                  "  pm.expect(b.presignedUploadUrl).to.include('X-Amz-Signature');",
+                  "  pm.expect(b.expiresAt).to.be.a('string');",
+                  "});",
+                  "pm.test('URL expires in ~5 minutes', () => {",
+                  "  const s = (new Date(b.expiresAt) - Date.now()) / 1000;",
+                  "  pm.expect(s).to.be.within(240, 310);",
+                  "});",
+                  "pm.collectionVariables.set('vo_videoId', b.videoId);",
+                  "pm.collectionVariables.set('vo_uploadUrl', b.presignedUploadUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "Creates a PENDING row and returns a 5-minute presigned S3 PUT URL.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{ownerId}}\",\n  \"title\": \"1. VIEW_ONCE_5MIN happy path\",\n  \"durationSeconds\": 8,\n  \"retentionType\": \"VIEW_ONCE_5MIN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. Upload bytes directly to S3 (presigned PUT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('S3 accepted the upload (200)', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "video/mp4"
+              }
+            ],
+            "url": "{{vo_uploadUrl}}",
+            "description": "Goes straight to S3/LocalStack, NOT the Spring Boot app. Content-Type MUST be video/mp4 (it is part of the signature). To upload a real file: Body > binary > select file.",
+            "body": {
+              "mode": "raw",
+              "raw": "ephemeral-test-video-bytes",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3. Confirm upload",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status is READY', () => pm.expect(b.status).to.eql('READY'));",
+                  "pm.test('retention clock started (VIEW_ONCE_5MIN)', () => {",
+                  "  const s = (new Date(b.expiresAt) - Date.now()) / 1000;",
+                  "  pm.expect(s).to.be.within(240, 310);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/confirm",
+            "description": "Backend HEADs the S3 object, flips PENDING -> READY and starts the TTL clock."
+          }
+        },
+        {
+          "name": "4. Confirm again (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK again', () => pm.response.to.have.status(200));",
+                  "pm.test('still READY', () => pm.expect(pm.response.json().status).to.eql('READY'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "5. Request play token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('token + signed URL returned', () => {",
+                  "  pm.expect(b.playbackToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(b.cloudfrontSignedUrl).to.match(/^https?:\\/\\//);",
+                  "});",
+                  "pm.collectionVariables.set('vo_playbackToken', b.playbackToken);",
+                  "pm.collectionVariables.set('vo_signedUrl', b.cloudfrontSignedUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/play-token",
+            "description": "Stores a single-use token in Redis (key video:token:{videoId}, TTL 90s) and returns a 60s signed URL (CloudFront in prod, S3 presigned GET locally).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "6. Second play token while session active (expect 409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('message mentions active session', () => pm.expect(pm.response.json().message).to.include('already active'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/play-token",
+            "description": "VIEW_ONCE uses Redis SET NX, so only one live token can exist.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "7. Play video via signed URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('bytes match what was uploaded', () => pm.expect(pm.response.text()).to.eql('ephemeral-test-video-bytes'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{vo_signedUrl}}",
+            "description": "Simulates the player. If you get 403 SignatureDoesNotMatch in Postman, use curl -L \"<signedUrl>\" (see guide)."
+          }
+        },
+        {
+          "name": "8. Complete with WRONG token (expect 410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/complete",
+            "description": "A wrong token must not burn the real one.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"not-a-real-token\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "9. Complete with correct token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('action = HARD_DELETE_SCHEDULED', () => pm.expect(pm.response.json().action).to.eql('HARD_DELETE_SCHEDULED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/complete",
+            "description": "Atomically burns the token via Lua. VIEW_ONCE: row -> EXPIRED and async hard delete from S3. STORE_24HR: soft delete (object tagged playback-completed=true, kept until 24h).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"{{vo_playbackToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "10. Complete again with same token (expect 410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone - token already burned', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/complete",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"{{vo_playbackToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "11. Play token after completion (expect 410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone - video no longer available', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{vo_videoId}}/play-token",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "12. Old signed URL after async delete (expect 404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 - object deleted from S3', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{vo_signedUrl}}",
+            "description": "Async delete normally finishes in <1s. Run with >= 3s delay (Runner) or wait a moment before sending."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. STORE_24HR happy path",
+      "item": [
+        {
+          "name": "1. Upload request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('videoId + presigned URL returned', () => {",
+                  "  pm.expect(b.videoId).to.be.a('string');",
+                  "  pm.expect(b.presignedUploadUrl).to.include('X-Amz-Signature');",
+                  "  pm.expect(b.expiresAt).to.be.a('string');",
+                  "});",
+                  "pm.test('URL expires in ~5 minutes', () => {",
+                  "  const s = (new Date(b.expiresAt) - Date.now()) / 1000;",
+                  "  pm.expect(s).to.be.within(240, 310);",
+                  "});",
+                  "pm.collectionVariables.set('st_videoId', b.videoId);",
+                  "pm.collectionVariables.set('st_uploadUrl', b.presignedUploadUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "Creates a PENDING row and returns a 5-minute presigned S3 PUT URL.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{ownerId}}\",\n  \"title\": \"2. STORE_24HR happy path\",\n  \"durationSeconds\": 8,\n  \"retentionType\": \"STORE_24HR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2. Upload bytes directly to S3 (presigned PUT)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('S3 accepted the upload (200)', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "video/mp4"
+              }
+            ],
+            "url": "{{st_uploadUrl}}",
+            "description": "Goes straight to S3/LocalStack, NOT the Spring Boot app. Content-Type MUST be video/mp4 (it is part of the signature). To upload a real file: Body > binary > select file.",
+            "body": {
+              "mode": "raw",
+              "raw": "ephemeral-test-video-bytes",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3. Confirm upload",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status is READY', () => pm.expect(b.status).to.eql('READY'));",
+                  "pm.test('retention clock started (STORE_24HR)', () => {",
+                  "  const s = (new Date(b.expiresAt) - Date.now()) / 1000;",
+                  "  pm.expect(s).to.be.within(86300, 86500);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/confirm",
+            "description": "Backend HEADs the S3 object, flips PENDING -> READY and starts the TTL clock."
+          }
+        },
+        {
+          "name": "4. Confirm again (idempotent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK again', () => pm.response.to.have.status(200));",
+                  "pm.test('still READY', () => pm.expect(pm.response.json().status).to.eql('READY'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "5. Request play token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('token + signed URL returned', () => {",
+                  "  pm.expect(b.playbackToken).to.be.a('string').and.not.empty;",
+                  "  pm.expect(b.cloudfrontSignedUrl).to.match(/^https?:\\/\\//);",
+                  "});",
+                  "pm.collectionVariables.set('st_playbackToken', b.playbackToken);",
+                  "pm.collectionVariables.set('st_signedUrl', b.cloudfrontSignedUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/play-token",
+            "description": "Stores a single-use token in Redis (key video:token:{videoId}, TTL 90s) and returns a 60s signed URL (CloudFront in prod, S3 presigned GET locally).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "7. Play video via signed URL",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('bytes match what was uploaded', () => pm.expect(pm.response.text()).to.eql('ephemeral-test-video-bytes'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{st_signedUrl}}",
+            "description": "Simulates the player. If you get 403 SignatureDoesNotMatch in Postman, use curl -L \"<signedUrl>\" (see guide)."
+          }
+        },
+        {
+          "name": "8. Complete with WRONG token (expect 410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/complete",
+            "description": "A wrong token must not burn the real one.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"not-a-real-token\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "9. Complete with correct token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('action = SOFT_DELETE_RECORDED', () => pm.expect(pm.response.json().action).to.eql('SOFT_DELETE_RECORDED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/complete",
+            "description": "Atomically burns the token via Lua. VIEW_ONCE: row -> EXPIRED and async hard delete from S3. STORE_24HR: soft delete (object tagged playback-completed=true, kept until 24h).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"{{st_playbackToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "10. Complete again with same token (expect 410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone - token already burned', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/complete",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"playbackToken\": \"{{st_playbackToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "11. New play token after completion (still allowed, expect 200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK - STORE_24HR is replayable until expiry', () => pm.response.to.have.status(200));",
+                  "pm.test('fresh token', () => pm.expect(pm.response.json().playbackToken).to.not.eql(pm.collectionVariables.get('st_playbackToken')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{st_videoId}}/play-token",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Negative & validation",
+      "item": [
+        {
+          "name": "N1. Upload request - blank fields / duration 0 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('validation details listed', () => pm.expect(b.details.length).to.be.above(0));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"\",\n  \"title\": \"\",\n  \"durationSeconds\": 0,\n  \"retentionType\": \"VIEW_ONCE_5MIN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "N2. Upload request - unknown retentionType (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"alice\",\n  \"title\": \"x\",\n  \"durationSeconds\": 5,\n  \"retentionType\": \"FOREVER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "N3. Upload request - duration over 600 (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"alice\",\n  \"title\": \"x\",\n  \"durationSeconds\": 9999,\n  \"retentionType\": \"STORE_24HR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "N4. Confirm - malformed UUID (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/not-a-uuid/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "N5. Confirm - unknown video (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/00000000-0000-0000-0000-000000000000/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "N6. Play token - empty body (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/00000000-0000-0000-0000-000000000000/play-token",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "N7. Create video but NEVER upload it",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('neg_videoId', pm.response.json().videoId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{ownerId}}\",\n  \"title\": \"never uploaded\",\n  \"durationSeconds\": 5,\n  \"retentionType\": \"STORE_24HR\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "N8. Confirm without S3 object (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('mentions missing object', () => pm.expect(pm.response.json().message).to.include('No uploaded object'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{neg_videoId}}/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "N9. Play token on PENDING video (410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{neg_videoId}}/play-token",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Manual - 5 minute TTL fallback",
+      "item": [
+        {
+          "name": "F1. Upload request (VIEW_ONCE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('fb_videoId', b.videoId);",
+                  "pm.collectionVariables.set('fb_uploadUrl', b.presignedUploadUrl);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/upload-request",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{ownerId}}\",\n  \"title\": \"fallback ttl test\",\n  \"durationSeconds\": 5,\n  \"retentionType\": \"VIEW_ONCE_5MIN\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "F2. Upload bytes to S3",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "video/mp4"
+              }
+            ],
+            "url": "{{fb_uploadUrl}}",
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "ephemeral-test-video-bytes",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "F3. Confirm (starts 5-minute clock)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "console.log('NOW WAIT ~6 MINUTES, then run F4. expiresAt =', pm.response.json().expiresAt);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/videos/{{fb_videoId}}/confirm",
+            "description": ""
+          }
+        },
+        {
+          "name": "F4. (after 6 min) Play token must be rejected (410)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('410 Gone - TTL fallback expired the video', () => pm.response.to.have.status(410));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/videos/{{fb_videoId}}/play-token",
+            "description": "Run only after waiting more than 5 minutes (+ up to 30s sweeper interval). Then check the DB: status should be DELETED and the S3 object gone.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"{{viewerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
